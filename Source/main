@@ -1,0 +1,272 @@
+clc; clear; close all
+
+%% Parameters
+numBlocks        = 20;               
+samplesPerBlock  = 120;              
+tBlock           = linspace(0,2*pi,samplesPerBlock);
+
+%% 1. Build the input signal: sum of 3 sines
+tTotal       = repmat(tBlock,1,numBlocks); 
+input_signal = 10*sin(2*pi    * tTotal) ... 
+             + (10/3)*sin(6*pi * tTotal) ...
+             + (10/3)*sin(10*pi* tTotal);
+
+%% 2. Add Gaussian White Noise (GWN) via awgn() and plot (0–200)
+snr_dB       = 10;                          
+noisy_signal = awgn(input_signal, snr_dB, 'measured');
+
+figure
+  subplot(2,1,1)
+    plot(input_signal, 'LineWidth',1.2)
+    xlim([1 200])
+    title('\bf\it Original Input Signal (Samples 1–200)')
+    xlabel('Sample Index'), ylabel('Amplitude'), grid on
+
+  subplot(2,1,2)
+    plot(noisy_signal, 'LineWidth',1.2)
+    xlim([1 200])
+    title(sprintf('\\bf\\it Noisy Input Signal @ %d dB SNR (Samples 1–200)',snr_dB))
+    xlabel('Sample Index'), ylabel('Amplitude'), grid on
+
+%% 3. Build the carrier reference
+carrier_signal = repmat(cos(tBlock),1,numBlocks);
+
+%% 4. BPSK modulation & noise comparison (0–500)
+bpsk_mod_signal = input_signal .* carrier_signal;
+bpsk_mod_noisy  = awgn(bpsk_mod_signal, snr_dB, 'measured');
+
+figure
+  subplot(2,1,1)
+    plot(bpsk_mod_signal, 'LineWidth',1.2)
+    xlim([1 500])
+    ylim([-max(abs(bpsk_mod_signal)) max(abs(bpsk_mod_signal))])
+    title('\bf\it BPSK Modulated (Clean, Samples 1–500)')
+    xlabel('Sample Index'), ylabel('Amplitude'), grid on
+
+  subplot(2,1,2)
+    plot(bpsk_mod_noisy, 'LineWidth',1)
+    xlim([1 500])
+    ylim([-max(abs(bpsk_mod_signal)) max(abs(bpsk_mod_signal))])
+    title(sprintf('\\bf\\it BPSK + GWN @ %d dB SNR (Samples 1–500)',snr_dB))
+    xlabel('Sample Index'), ylabel('Amplitude'), grid on
+
+%% 5. Prepare the six hop-carriers
+c1 = repmat(cos(linspace(0,2*pi,10)), 1, 12);
+c2 = repmat(cos(linspace(0,2*pi,20)), 1, 6);
+c3 = repmat(cos(linspace(0,2*pi,30)), 1, 4);
+c4 = repmat(cos(linspace(0,2*pi,40)), 1, 3);
+c5 = repmat(cos(linspace(0,2*pi,60)), 1, 2);
+c6 =         cos(linspace(0,2*pi,120));
+
+%% 6. Build the random-hop spread carrier
+spread_signal = zeros(1, samplesPerBlock*numBlocks);
+for n = 1:numBlocks
+    idx = (n-1)*samplesPerBlock + (1:samplesPerBlock);
+    hop = randi(6);
+    switch hop
+        case 1, spread_signal(idx) = c1;
+        case 2, spread_signal(idx) = c2;
+        case 3, spread_signal(idx) = c3;
+        case 4, spread_signal(idx) = c4;
+        case 5, spread_signal(idx) = c5;
+        case 6, spread_signal(idx) = c6;
+    end
+end
+
+%% 7. Visualize the spread signal (first 500 samples)
+figure
+plot(spread_signal, 'LineWidth',1.2)
+xlim([1 500])
+ylim([-1.5 1.5])
+title('\bf\it Spread Signal with 6 Frequencies (Samples 1–500)')
+xlabel('Sample Index'), ylabel('Amplitude'), grid on
+
+%% 8. FHSS transmit & demodulate (unchanged)
+freq_hopped_sig   = bpsk_mod_signal .* spread_signal;
+bpsk_demodulated  = freq_hopped_sig ./ spread_signal;
+original_analog   = bpsk_demodulated ./ carrier_signal;
+
+%% 9. QPSK Modulation & Noise Comparison (first 200 symbols)
+bitSeq        = round(rand(1,400));  % 400 bits → 200 symbols
+qpskMod       = comm.QPSKModulator( ...
+                  'BitInput',      true, ...
+                  'SymbolMapping', 'Gray' );
+qpskSig       = qpskMod(bitSeq(:));
+qpskSigNoisy  = awgn(qpskSig, snr_dB, 'measured');
+
+figure
+  subplot(2,1,1)
+    plot(real(qpskSig(1:200)), 'LineWidth',1.2)
+    xlim([1 200])
+    title('\bf\it QPSK Clean (I-branch, Symbols 1–200)')
+    xlabel('Symbol Index'), ylabel('Amplitude'), grid on
+
+  subplot(2,1,2)
+    plot(real(qpskSigNoisy(1:200)), 'LineWidth',1)
+    xlim([1 200])
+    title(sprintf('\\bf\\it QPSK + AWGN @ %d dB SNR (I-branch, 1–200)',snr_dB))
+    xlabel('Symbol Index'), ylabel('Amplitude'), grid on
+
+%% 10. GMSK Modulation & Noise Comparison (first 200 bits)
+gmskMod      = comm.GMSKModulator( ...
+                  'BitInput',            true, ...
+                  'BandwidthTimeProduct',0.3, ...
+                  'PulseLength',         4 );
+gmskSig      = gmskMod(bitSeq(:));
+gmskSigNoisy = awgn(gmskSig, snr_dB, 'measured');
+
+figure
+  subplot(2,1,1)
+    plot(real(gmskSig(1:200)), 'LineWidth',1.2)
+    xlim([1 200])
+    title('\bf\it GMSK Clean (I-branch, Bits 1–200)')
+    xlabel('Bit Index'), ylabel('Amplitude'), grid on
+
+  subplot(2,1,2)
+    plot(real(gmskSigNoisy(1:200)), 'LineWidth',1)
+    xlim([1 200])
+    title(sprintf('\\bf\\it GMSK + AWGN @ %d dB SNR (I-branch, 1–200)',snr_dB))
+    xlabel('Bit Index'), ylabel('Amplitude'), grid on
+
+%% 11. Demodulate BPSK, QPSK & GMSK and visualize
+% BPSK
+bpsk_demodulated = bpsk_mod_noisy ./ carrier_signal;
+% QPSK
+qpskDem        = comm.QPSKDemodulator( ...
+                    'BitOutput',     true, ...
+                    'SymbolMapping', 'Gray', ...
+                    'PhaseOffset',   0 );
+qpsk_bits_recv = qpskDem(qpskSigNoisy);
+% GMSK
+gmskDem        = comm.GMSKDemodulator( ...
+                    'BitOutput',            true, ...
+                    'BandwidthTimeProduct', 0.3, ...
+                    'PulseLength',          4 );
+gmsk_bits_recv = gmskDem(gmskSigNoisy);
+
+figure
+% — BPSK analog (first 500)
+subplot(3,1,1)
+y = bpsk_demodulated(1:500);
+plot(y,'LineWidth',1.2)
+xlim([1 500]); axis tight; axis padded
+title('\bf\it Demodulated BPSK Analog (Samples 1–500)')
+xlabel('Sample Index'), ylabel('Amplitude'), grid on
+% — QPSK bits (first 200)
+subplot(3,1,2)
+stairs(qpsk_bits_recv(1:200),'LineWidth',1.2)
+xlim([1 200]), ylim([-0.1 1.1])
+title('\bf\it Demodulated QPSK Bits (Bits 1–200)')
+xlabel('Bit Index'), ylabel('Bit Value'), grid on
+% — GMSK bits (first 200)
+subplot(3,1,3)
+stairs(gmsk_bits_recv(1:200),'LineWidth',1.2)
+xlim([1 200]), ylim([-0.1 1.1])
+title('\bf\it Demodulated GMSK Bits (Bits 1–200)')
+xlabel('Bit Index'), ylabel('Bit Value'), grid on
+
+%% 12. Constellation Diagrams via comm.ConstellationDiagram
+
+% --- BPSK (row vector → transpose to column) ---
+refBPSK = [-1+0j; 1+0j];
+cdBPSK_TX = comm.ConstellationDiagram( ...
+    'ReferenceConstellation',     refBPSK, ...
+    'ShowReferenceConstellation', true, ...
+    'Title',                      'BPSK TX Constellation');
+cdBPSK_RX = comm.ConstellationDiagram( ...
+    'ReferenceConstellation',     refBPSK, ...
+    'ShowReferenceConstellation', true, ...
+    'Title',                      'BPSK RX Constellation');
+cdBPSK_TX(bpsk_mod_signal(1:500).');    
+cdBPSK_RX(bpsk_mod_noisy(1:500).');
+
+% --- QPSK (already column → no transpose) ---
+refQPSK = exp(1j*(pi/4 + (0:3)*pi/2)).';
+cdQPSK_TX = comm.ConstellationDiagram( ...
+    'ReferenceConstellation',     refQPSK, ...
+    'ShowReferenceConstellation', true, ...
+    'Title',                      'QPSK TX Constellation');
+cdQPSK_RX = comm.ConstellationDiagram( ...
+    'ReferenceConstellation',     refQPSK, ...
+    'ShowReferenceConstellation', true, ...
+    'Title',                      'QPSK RX Constellation');
+cdQPSK_TX(qpskSig(1:200));           % feed as 200×1 column
+cdQPSK_RX(qpskSigNoisy(1:200));
+
+% --- GMSK (already column → no transpose) ---
+cdGMSK_TX = comm.ConstellationDiagram( ...
+    'ShowReferenceConstellation', false, ...
+    'Title',                      'GMSK TX Constellation');
+cdGMSK_RX = comm.ConstellationDiagram( ...
+    'ShowReferenceConstellation', false, ...
+    'Title',                      'GMSK RX Constellation');
+cdGMSK_TX(gmskSig(1:400));           % feed as 400×1 column
+cdGMSK_RX(gmskSigNoisy(1:400));
+
+%% Eye Diagrams for BPSK, QPSK, and GMSK
+
+% --- BPSK Eye Diagrams ---
+figure
+subplot(2,1,1)
+eyediagram(bpsk_mod_signal, samplesPerBlock)
+title('BPSK TX Eye Diagram')
+xlabel('Samples')
+ylabel('Amplitude')
+
+subplot(2,1,2)
+eyediagram(bpsk_mod_noisy, samplesPerBlock)
+title(sprintf('BPSK RX Eye Diagram (SNR = %d dB)', snr_dB))
+xlabel('Samples')
+ylabel('Amplitude')
+
+% --- QPSK Eye Diagrams (2 samples per trace) ---
+figure
+subplot(2,1,1)
+eyediagram(qpskSig, 2)
+title('QPSK TX Eye Diagram (2 samples/symbol)')
+xlabel('Samples')
+ylabel('Amplitude')
+
+subplot(2,1,2)
+eyediagram(qpskSigNoisy, 2)
+title(sprintf('QPSK RX Eye Diagram (SNR = %d dB)', snr_dB))
+xlabel('Samples')
+ylabel('Amplitude')
+
+% --- GMSK Eye Diagrams (2 samples per trace) ---
+figure
+subplot(2,1,1)
+eyediagram(gmskSig, 2)
+title('GMSK TX Eye Diagram (2 samples/symbol)')
+xlabel('Samples')
+ylabel('Amplitude')
+
+subplot(2,1,2)
+eyediagram(gmskSigNoisy, 2)
+title(sprintf('GMSK RX Eye Diagram (SNR = %d dB)', snr_dB))
+xlabel('Samples')
+ylabel('Amplitude')
+
+%% 13. Compare Transmitted vs. Received Bits (first 10 bits)
+nBits      = 10;
+txBits     = bitSeq(1:nBits).';
+rxQ        = qpsk_bits_recv(1:nBits);
+rxG        = gmsk_bits_recv(1:nBits);
+berQ       = mean(txBits~=rxQ);
+berG       = mean(txBits~=rxG);
+fprintf('QPSK BER (1–%d) = %.4f\nGMSK BER (1–%d) = %.4f\n',nBits,berQ,nBits,berG);
+
+figure
+subplot(2,1,1)
+stairs(1:nBits,txBits,      'b','LineWidth',1.2), hold on
+stairs(1:nBits,rxQ+0.05,'r--','LineWidth',1), hold off
+xlim([1 nBits]), ylim([-0.2 1.2])
+title('\bf\it QPSK: TX vs RX Bits (1–10)')
+xlabel('Bit Index'), ylabel('Value'), legend('Tx','Rx'), grid on
+
+subplot(2,1,2)
+stairs(1:nBits,txBits,      'b','LineWidth',1.2), hold on
+stairs(1:nBits,rxG+0.05,'r--','LineWidth',1), hold off
+xlim([1 nBits]), ylim([-0.2 1.2])
+title('\bf\it GMSK: TX vs RX Bits (1–10)')
+xlabel('Bit Index'), ylabel('Value'), legend('Tx','Rx'), grid on
